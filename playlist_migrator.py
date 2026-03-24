@@ -2,13 +2,10 @@ import os
 import json
 import logging
 import datetime
+import time
 import pandas as pd
 from dotenv import load_dotenv
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from ytmusicapi import YTMusic
 
 # Set up logging
 logging.basicConfig(
@@ -19,11 +16,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-SCOPES = ['https://www.googleapis.com/auth/youtube']
-
-class QuotaExceededError(Exception):
-    pass
 
 class StateManager:
     def __init__(self, state_file='state.json'):
@@ -53,54 +45,17 @@ class StateManager:
     def set(self, key, value):
         self.state[key] = value
 
-class QuotaTracker:
-    DAILY_LIMIT = 10000
-    COST_SEARCH = 100
-    COST_PLAYLIST_CREATE = 50
-    COST_PLAYLIST_INSERT = 50
-
-    def __init__(self, state_manager):
-        self.state_manager = state_manager
-        self.reset_if_new_day()
-        self.current_usage = self.state_manager.get('quota_usage', 0)
-
-    def reset_if_new_day(self):
-        last_date = self.state_manager.get('last_run_date')
-        today = datetime.date.today().isoformat()
-        if last_date != today:
-            self.state_manager.set('last_run_date', today)
-            self.state_manager.set('quota_usage', 0)
-            self.state_manager.save()
-            self.current_usage = 0
-
-    def add_usage(self, cost):
-        self.reset_if_new_day()
-        if self.current_usage + cost >= self.DAILY_LIMIT:
-            logger.warning("Approaching daily quota limit. Pausing execution.")
-            raise QuotaExceededError("Quota limit reached")
-
-        self.current_usage += cost
-        self.state_manager.set('quota_usage', self.current_usage)
-        self.state_manager.save()
-        logger.info(f"Quota used: {self.current_usage}/{self.DAILY_LIMIT}")
 
 def authenticate():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists('client_secrets.json'):
-                logger.error("client_secrets.json not found. Please provide it to authenticate.")
-                return None
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'client_secrets.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('youtube', 'v3', credentials=creds)
+    if not os.path.exists('headers_auth.json'):
+        logger.error("headers_auth.json not found. Please provide it to authenticate with YTMusic.")
+        return None
+    try:
+        ytmusic = YTMusic("headers_auth.json")
+        return ytmusic
+    except Exception as e:
+        logger.error(f"Failed to authenticate with ytmusicapi: {e}")
+        return None
 
 def process_csvs():
     load_dotenv()
@@ -109,12 +64,11 @@ def process_csvs():
         logger.error("CSV_FOLDER environment variable not set or invalid directory.")
         return
 
-    youtube = authenticate()
-    if not youtube:
+    ytmusic = authenticate()
+    if not ytmusic:
         return
 
     state_manager = StateManager()
-    quota_tracker = QuotaTracker(state_manager)
 
     unmatched_file = 'unmatched_tracks.csv'
     if not os.path.exists(unmatched_file):
@@ -163,25 +117,25 @@ def process_csvs():
             playlist_id = playlist_mapping.get(playlist_name)
 
             if not playlist_id:
-                quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_CREATE)
                 logger.info(f"Creating playlist: {playlist_name}")
-                request = youtube.playlists().insert(
-                    part="snippet,status",
-                    body={
-                      "snippet": {
-                        "title": playlist_name,
-                        "description": "Imported using github.com/manavukani/yt-playlist-from-csv"
-                      },
-                      "status": {
-                        "privacyStatus": "public"
-                      }
-                    }
-                )
-                response = request.execute(num_retries=3)
-                playlist_id = response['id']
-                playlist_mapping[playlist_name] = playlist_id
-                state_manager.set('playlist_mapping', playlist_mapping)
-                state_manager.save()
+                try:
+                    playlist_id = ytmusic.create_playlist(
+                        title=playlist_name,
+                        description="Imported using github.com/manavukani/yt-playlist-from-csv",
+                        privacy_status="PRIVATE"
+                    )
+
+                    if type(playlist_id) is dict:
+                        # Sometimes create_playlist returns a dict instead of string id
+                        playlist_id = playlist_id.get('id') or playlist_id
+
+                    playlist_mapping[playlist_name] = playlist_id
+                    state_manager.set('playlist_mapping', playlist_mapping)
+                    state_manager.save()
+                    time.sleep(1) # Sleep to avoid rate limits
+                except Exception as e:
+                    logger.error(f"Failed to create playlist {playlist_name}: {e}")
+                    continue
 
             for index, row in df.iterrows():
                 if index < current_row:
@@ -189,22 +143,14 @@ def process_csvs():
 
                 track_name = row['Track Name']
                 artist_name = row['Artist Name(s)']
-                query = f'"{track_name}" "{artist_name}" official audio'
+                query = f'{track_name} {artist_name}'
 
                 logger.info(f"Searching for: {query}")
 
                 try:
-                    quota_tracker.add_usage(QuotaTracker.COST_SEARCH)
+                    search_results = ytmusic.search(query=query, filter="songs", limit=1)
 
-                    search_request = youtube.search().list(
-                        part="id",
-                        q=query,
-                        type="video",
-                        maxResults=1
-                    )
-                    search_response = search_request.execute(num_retries=3)
-
-                    if not search_response.get('items'):
+                    if not search_results:
                         logger.warning(f"No results found for: {query}")
                         unmatched_df = pd.DataFrame([{
                             'Playlist Name': playlist_name,
@@ -213,48 +159,35 @@ def process_csvs():
                         }])
                         unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
                     else:
-                        video_id = search_response['items'][0]['id']['videoId']
+                        video_id = search_results[0]['videoId']
+
+                        if not video_id:
+                             logger.warning(f"No video ID found for search result: {query}")
+                             continue
 
                         logger.info(f"Adding video {video_id} to playlist {playlist_name}")
-                        quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_INSERT)
 
-                        insert_request = youtube.playlistItems().insert(
-                            part="snippet",
-                            body={
-                                "snippet": {
-                                    "playlistId": playlist_id,
-                                    "resourceId": {
-                                        "kind": "youtube#video",
-                                        "videoId": video_id
-                                    }
-                                }
-                            }
-                        )
-                        insert_request.execute(num_retries=3)
+                        max_retries = 3
+                        base_delay = 2
+                        for attempt in range(max_retries):
+                            try:
+                                ytmusic.add_playlist_items(playlist_id, [video_id])
+                                break # success
+                            except Exception as e:
+                                if attempt == max_retries - 1:
+                                    logger.error(f"Failed to add item after {max_retries} attempts: {e}")
+                                    raise
+                                delay = base_delay * (2 ** attempt)
+                                logger.warning(f"Error adding track. Retrying in {delay} seconds... ({e})")
+                                time.sleep(delay)
 
                     current_row = index + 1
                     state_manager.set('current_row', current_row)
                     state_manager.save()
 
-                except QuotaExceededError:
-                    raise
-                except HttpError as e:
-                    if hasattr(e, 'resp') and e.resp.status in [403]:
-                        raise
-                    logger.error(f"HTTP error processing track {track_name}: {e}")
-                    # Log the failed track and continue
-                    unmatched_df = pd.DataFrame([{
-                        'Playlist Name': playlist_name,
-                        'Track Name': track_name,
-                        'Artist Name': artist_name,
-                        'Reason': 'API Error'
-                    }])
-                    unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
+                    # Be nice to the API
+                    time.sleep(1)
 
-                    # Still increment current row to move past failing tracks
-                    current_row = index + 1
-                    state_manager.set('current_row', current_row)
-                    state_manager.save()
                 except Exception as e:
                     logger.exception(f"Unexpected error processing track {track_name}: {e}")
                     # Log the failed track and continue
@@ -262,7 +195,7 @@ def process_csvs():
                         'Playlist Name': playlist_name,
                         'Track Name': track_name,
                         'Artist Name': artist_name,
-                        'Reason': 'Unexpected Error'
+                        'Reason': str(e)
                     }])
                     unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
 
@@ -270,6 +203,9 @@ def process_csvs():
                     current_row = index + 1
                     state_manager.set('current_row', current_row)
                     state_manager.save()
+
+                    # Sleep longer on error before continuing
+                    time.sleep(3)
 
 
             completed_csvs.append(csv_file)
@@ -283,12 +219,6 @@ def process_csvs():
 
         logger.info("All CSVs processed successfully!")
 
-    except QuotaExceededError:
-        logger.info("Script paused due to quota limits. Run again tomorrow.")
-    except HttpError as e:
-        logger.error(f"An HTTP error occurred: {e}")
-        if hasattr(e, 'resp') and e.resp.status in [403]:
-            logger.error("Encountered 403 error. Possibly quota exceeded.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred: {e}")
 
