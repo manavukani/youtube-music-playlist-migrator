@@ -104,9 +104,9 @@ def authenticate():
 
 def process_csvs():
     load_dotenv()
-    csv_folder = os.getenv('SPOTIFY_CSV_FOLDER')
+    csv_folder = os.getenv('CSV_FOLDER')
     if not csv_folder or not os.path.isdir(csv_folder):
-        logger.error("SPOTIFY_CSV_FOLDER environment variable not set or invalid directory.")
+        logger.error("CSV_FOLDER environment variable not set or invalid directory.")
         return
 
     youtube = authenticate()
@@ -170,10 +170,10 @@ def process_csvs():
                     body={
                       "snippet": {
                         "title": playlist_name,
-                        "description": "Imported from Spotify"
+                        "description": "Imported using github.com/manavukani/yt-playlist-from-csv"
                       },
                       "status": {
-                        "privacyStatus": "private"
+                        "privacyStatus": "public"
                       }
                     }
                 )
