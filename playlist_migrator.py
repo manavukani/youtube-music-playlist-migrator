@@ -58,6 +58,7 @@ class QuotaTracker:
     COST_SEARCH = 100
     COST_PLAYLIST_CREATE = 50
     COST_PLAYLIST_INSERT = 50
+    COST_PLAYLIST_ITEMS_LIST = 1
 
     def __init__(self, state_manager):
         self.state_manager = state_manager
@@ -215,22 +216,33 @@ def process_csvs():
                     else:
                         video_id = search_response['items'][0]['id']['videoId']
 
-                        logger.info(f"Adding video {video_id} to playlist {playlist_name}")
-                        quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_INSERT)
+                        quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_ITEMS_LIST)
+                        check_request = youtube.playlistItems().list(
+                            part="id",
+                            playlistId=playlist_id,
+                            videoId=video_id
+                        )
+                        check_response = check_request.execute(num_retries=3)
 
-                        insert_request = youtube.playlistItems().insert(
-                            part="snippet",
-                            body={
-                                "snippet": {
-                                    "playlistId": playlist_id,
-                                    "resourceId": {
-                                        "kind": "youtube#video",
-                                        "videoId": video_id
+                        if check_response.get('items'):
+                            logger.warning(f"Video {video_id} is already in playlist {playlist_name}. Skipping.")
+                        else:
+                            logger.info(f"Adding video {video_id} to playlist {playlist_name}")
+                            quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_INSERT)
+
+                            insert_request = youtube.playlistItems().insert(
+                                part="snippet",
+                                body={
+                                    "snippet": {
+                                        "playlistId": playlist_id,
+                                        "resourceId": {
+                                            "kind": "youtube#video",
+                                            "videoId": video_id
+                                        }
                                     }
                                 }
-                            }
-                        )
-                        insert_request.execute(num_retries=3)
+                            )
+                            insert_request.execute(num_retries=3)
 
                     current_row = index + 1
                     state_manager.set('current_row', current_row)
