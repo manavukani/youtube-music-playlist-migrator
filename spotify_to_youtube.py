@@ -71,6 +71,7 @@ class QuotaTracker:
             self.state_manager.set('last_run_date', today)
             self.state_manager.set('quota_usage', 0)
             self.state_manager.save()
+            self.current_usage = 0
 
     def add_usage(self, cost):
         self.reset_if_new_day()
@@ -191,47 +192,85 @@ def process_csvs():
                 query = f'"{track_name}" "{artist_name}" official audio'
 
                 logger.info(f"Searching for: {query}")
-                quota_tracker.add_usage(QuotaTracker.COST_SEARCH)
 
-                search_request = youtube.search().list(
-                    part="id",
-                    q=query,
-                    type="video",
-                    maxResults=1
-                )
-                search_response = search_request.execute(num_retries=3)
+                try:
+                    quota_tracker.add_usage(QuotaTracker.COST_SEARCH)
 
-                if not search_response['items']:
-                    logger.warning(f"No results found for: {query}")
+                    search_request = youtube.search().list(
+                        part="id",
+                        q=query,
+                        type="video",
+                        maxResults=1
+                    )
+                    search_response = search_request.execute(num_retries=3)
+
+                    if not search_response.get('items'):
+                        logger.warning(f"No results found for: {query}")
+                        unmatched_df = pd.DataFrame([{
+                            'Playlist Name': playlist_name,
+                            'Track Name': track_name,
+                            'Artist Name': artist_name
+                        }])
+                        unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
+                    else:
+                        video_id = search_response['items'][0]['id']['videoId']
+
+                        logger.info(f"Adding video {video_id} to playlist {playlist_name}")
+                        quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_INSERT)
+
+                        insert_request = youtube.playlistItems().insert(
+                            part="snippet",
+                            body={
+                                "snippet": {
+                                    "playlistId": playlist_id,
+                                    "resourceId": {
+                                        "kind": "youtube#video",
+                                        "videoId": video_id
+                                    }
+                                }
+                            }
+                        )
+                        insert_request.execute(num_retries=3)
+
+                    current_row = index + 1
+                    state_manager.set('current_row', current_row)
+                    state_manager.save()
+
+                except QuotaExceededError:
+                    raise
+                except HttpError as e:
+                    if hasattr(e, 'resp') and e.resp.status in [403]:
+                        raise
+                    logger.error(f"HTTP error processing track {track_name}: {e}")
+                    # Log the failed track and continue
                     unmatched_df = pd.DataFrame([{
                         'Playlist Name': playlist_name,
                         'Track Name': track_name,
-                        'Artist Name': artist_name
+                        'Artist Name': artist_name,
+                        'Reason': 'API Error'
                     }])
                     unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
-                else:
-                    video_id = search_response['items'][0]['id']['videoId']
 
-                    logger.info(f"Adding video {video_id} to playlist {playlist_name}")
-                    quota_tracker.add_usage(QuotaTracker.COST_PLAYLIST_INSERT)
+                    # Still increment current row to move past failing tracks
+                    current_row = index + 1
+                    state_manager.set('current_row', current_row)
+                    state_manager.save()
+                except Exception as e:
+                    logger.exception(f"Unexpected error processing track {track_name}: {e}")
+                    # Log the failed track and continue
+                    unmatched_df = pd.DataFrame([{
+                        'Playlist Name': playlist_name,
+                        'Track Name': track_name,
+                        'Artist Name': artist_name,
+                        'Reason': 'Unexpected Error'
+                    }])
+                    unmatched_df.to_csv(unmatched_file, mode='a', header=False, index=False)
 
-                    insert_request = youtube.playlistItems().insert(
-                        part="snippet",
-                        body={
-                            "snippet": {
-                                "playlistId": playlist_id,
-                                "resourceId": {
-                                    "kind": "youtube#video",
-                                    "videoId": video_id
-                                }
-                            }
-                        }
-                    )
-                    insert_request.execute(num_retries=3)
+                    # Still increment current row to move past failing tracks
+                    current_row = index + 1
+                    state_manager.set('current_row', current_row)
+                    state_manager.save()
 
-                current_row = index + 1
-                state_manager.set('current_row', current_row)
-                state_manager.save()
 
             completed_csvs.append(csv_file)
             state_manager.set('completed_csvs', completed_csvs)
