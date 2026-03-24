@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*$py.class
+token.json
+client_secrets.json
+.env
+state.json
+unmatched_tracks.csv
