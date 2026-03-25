@@ -26,7 +26,7 @@ unmatched_file = 'unmatched_tracks.csv'
 if os.path.exists(unmatched_file):
     try:
         df = pd.read_csv(unmatched_file)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width='stretch')
 
         btn_col1, btn_col2 = st.columns(2)
         with btn_col1:

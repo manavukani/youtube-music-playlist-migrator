@@ -40,7 +40,7 @@ def render_playlist_table(
     st.dataframe(
         df[display_cols],
         column_config=column_config,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
     )
     return df

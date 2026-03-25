@@ -47,7 +47,7 @@ if st.button("Scan Directory"):
                         "Status": f"❌ {str(e)}"
                     })
 
-            st.dataframe(pd.DataFrame(table_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(table_data), width='stretch')
 
 if st.button("Convert to playlists.json"):
     with st.spinner("Converting CSVs..."):

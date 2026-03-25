@@ -61,7 +61,7 @@ with tab_source:
 
                     st.dataframe(
                         pd.DataFrame(track_data),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                     )
         else:
