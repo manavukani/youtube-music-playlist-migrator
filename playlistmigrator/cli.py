@@ -6,6 +6,22 @@ from argparse import ArgumentParser
 from . import backend
 from . import auth as auth_module
 from . import state
+from . import creds_generator
+
+def generate_creds():
+    """
+    Generates creds.json from request headers (raw or curl format)
+    """
+    def parse_arguments():
+        parser = ArgumentParser(description="Generate creds.json from request headers file")
+        parser.add_argument("--input", default="request_headers.txt", help="Path to request headers file (default: request_headers.txt)")
+        parser.add_argument("--output", default="creds.json", help="Path to save credentials (default: creds.json)")
+        return parser.parse_args()
+    args = parse_arguments()
+    creds_generator.setup_ytmusic_with_request_headers(
+        input_file=args.input, credentials_file=args.output
+    )
+    print("YTMusic setup completed successfully!")
 
 def auth():
     """
