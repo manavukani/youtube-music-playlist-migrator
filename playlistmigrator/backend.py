@@ -374,10 +374,7 @@ def copier(
         state_manager.set('current_csv', csv_file_id)
         state_manager.save()
 
-    # convert iterator to list to allow skipping
-    src_tracks_list = list(src_tracks)
-
-    for index, src_track in enumerate(src_tracks_list):
+    for index, src_track in enumerate(src_tracks):
         if index < current_row:
             continue
 
