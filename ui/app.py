@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import streamlit as st
 
 st.set_page_config(
@@ -18,7 +22,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Sidebar: show queue summary badge if jobs are running
-from ui.session import get_queue_manager
+from session import get_queue_manager
 qm = get_queue_manager()
 
 if qm.is_busy:
