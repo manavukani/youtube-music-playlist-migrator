@@ -1,5 +1,5 @@
-google-api-python-client
-google-auth-oauthlib
-google-auth
-pandas
 python-dotenv
+ytmusicapi
+streamlit>=1.35.0
+streamlit-autorefresh>=0.0.1
+pandas>=2.0.0

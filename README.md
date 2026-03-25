@@ -1,85 +1,237 @@
-# YouTube Playlist Migrator
+# Playlist Migrator
 
-Automate the process of replicating your Spotify (or other) playlists to your YouTube account using the YouTube Data API v3.
+A tool to migrate Spotify (or other) playlists from CSV exports to YouTube Music using `ytmusicapi`. Supports a full CLI and a Streamlit web UI with a job queue for managing transfers.
 
-It reads *CSV files* exported from your source account (containing "Track Name" and "Artist Name(s)") and intelligently searches YouTube to find the corresponding "official audio" for each track, then adds it to a newly created YouTube playlist.
+---
 
 ## Features
 
-- **Automated YouTube Playlists:** Creates private YouTube playlists named after each CSV file.
-- **Intelligent Search:** Searches for `{Track Name} {Artist Name(s)} official audio` to avoid live versions or fan covers.
-- **Quota Management (Critical):** The YouTube API has a strict 10,000 unit daily limit. This script calculates costs and gracefully pauses execution before exceeding the limit, preventing `403 Quota Exceeded` errors.
-- **State Resumption:** If the script pauses due to quota limits or manual interruption, it saves its state to `state.json`. You can re-run it the next day, and it will pick up *exactly* where it left off (down to the specific row in the CSV) without duplicating playlists or songs.
-- **Graceful Error Handling:** If a track cannot be found on YouTube, it logs the details to `unmatched_tracks.csv` and continues.
+- **CSV → YouTube Music**: Reads CSV exports (containing `Track Name` and `Artist Name(s)`) and migrates them as playlists to your YTMusic account
+- **Intelligent Track Matching**: Three search algorithms — exact, extended, and approximate — with fallback to video search
+- **Job Queue UI**: Submit individual playlist transfers via the web UI; jobs run sequentially in the background so you can queue multiple without doing them one-by-one or all-at-once
+- **State Resumption**: Progress is saved to `state.json` after every track — if the process is interrupted, re-running picks up exactly where it left off
+- **Mismatch & Error Tracking**: Failed lookups, duplicates, and suspicious matches are logged to `unmatched_tracks.csv` for manual review
+- **Dry Run Mode**: Test any transfer without writing changes to YTMusic
 
-## Setup Instructions
+---
 
-### 1. Prerequisites
-- Python 3.7+ installed.
-- A Google Cloud Platform (GCP) account.
+## Installation
 
-### 2. Install Dependencies (Using venv is recommended)
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/manavukani/yt-playlist-from-csv.git
+cd yt-playlist-from-csv
+```
+
+### 2. Create a virtual environment and install dependencies
+
+**Windows:**
 ```bash
 python -m venv myvenv
 myvenv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Get YouTube API Credentials
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project.
-3. Navigate to **APIs & Services** > **Library**, search for "YouTube Data API v3", and enable it for your project.
-4. Go to **APIs & Services** > **Credentials**.
-5. Click **Create Credentials** > **OAuth client ID**.
-6. Set the Application type to **Desktop app** and give it a name.
-7. Click **Create**.
-8. Download the JSON file for your new credentials and rename it to `client_secrets.json`.
-9. Place `client_secrets.json` in the root directory of this project.
-
-### 4. Configure Environment Variables
-1. Create a `.env` file in the root directory.
-2. Add the path to your folder containing the Playlist CSVs:
-   ```env
-   CSV_FOLDER=/path/to/your/csvs
-   ```
-   **Note:** Ensure your CSV files have the columns exactly named: `Track Name` and `Artist Name(s)`.
-
-## Usage
-
-Run the script:
-
+**Linux / Mac:**
 ```bash
-python playlist_migrator.py
+python3 -m venv myvenv
+source myvenv/bin/activate
+pip install -r requirements.txt
 ```
 
-### First Run (Authentication)
-The first time you run the script, it will open a browser window asking you to log into your Google/YouTube account and grant the application permissions.
-Once granted, it will save a `token.json` file locally so you don't have to log in every time.
+---
 
-### Subsequent Runs
-If the script hits the 10,000 unit daily quota limit, it will log a warning and exit.
-Wait until the next day (when your quota resets), and simply run `python playlist_migrator.py` again. It will automatically read `state.json` and resume the migration seamlessly.
+## Authentication (via Request Headers)
 
-## Output Files
-- **`state.json`**: Tracks the internal state and quota usage. Do not edit this manually unless you want to reset the script's progress.
-- **`token.json`**: Your cached OAuth 2.0 credentials. Keep this file secure.
-- **`unmatched_tracks.csv`**: A list of any songs that could not be found on YouTube, allowing you to manually add them later if desired.
+1. Open YouTube Music in **Chrome/Firefox** and make sure you're logged in
+2. Press `F12` to open DevTools → go to the **Network** tab → filter by `/browse`
+3. Click any request → right-click → **Copy > Copy as cURL**
+4. Paste the copied content into `request_headers.txt` in the project root
+5. Run:
 
+```bash
+python -m playlistmigrator generate-creds
+```
 
-## Tips for Creating the CSV of Spotify Playlists
+This generates `creds.json` from your session headers. You can also specify custom paths:
 
-### Easiest no-code options
+```bash
+python -m playlistmigrator generate-creds --input my_headers.txt --output my_creds.json
+```
 
-- **Exportify (free web app)**: Log in with Spotify, select playlists, and export them as CSV files that include track name, artist, album, duration, added date, etc. [exportify](https://exportify.net)
-- **Soundiiz / TuneMyMusic**: Connect your Spotify account, pick a playlist, then choose “export as file” (CSV/TXT/JSON/XML, etc.). [soundiiz](https://soundiiz.com/blog/export-download-your-spotify-playlists-to-text-or-csv/)
-- **Browser extensions**: Chrome extensions like “Spotify Scraper – Export Playlists & More” can scrape playlist data and download it in various formats without extra setup. [chromewebstore.google](https://chromewebstore.google.com/detail/spotify-scraper-export-pl/khgafgeeamiogcfgjknmjomangdamhmn)
+Alternatively, you could also use the *Advanced Setup via request headers* in the Streamlit UI.
 
-These are great if you just want spreadsheets of your playlists without coding.
+> ⚠️ **Security warning**: `request_headers.txt` and `creds.json` contain your session tokens. Never commit these files to Git. They are already listed in `.gitignore`.
 
-### Using the Spotify Web API (for coding)
+---
 
-If you’re comfortable with code, you can get very detailed metadata via the official API:
+## Preparing Your CSV Files
 
-- Use the **Get Playlist** and **Get Playlist Items** endpoints to fetch tracks and fields you care about (track name, ID, artists, album, popularity, etc.). [developer.spotify](https://developer.spotify.com/documentation/web-api/reference/get-playlist)
-- Libraries like **Spotipy** (Python) simplify this; you authenticate, call the playlist endpoint, loop over `tracks.items`, and then write everything to CSV. [stackoverflow](https://stackoverflow.com/questions/50490231/get-artist-names-only-from-spotify-web-apis-get-a-playlists-tracks-endpoint)
-- No-code “API wrappers” like Stevesie provide a UI over the same endpoints and output directly to CSV while handling pagination for large playlists. [stevesie](https://stevesie.com/apps/spotify-api)
+Each CSV file represents one playlist. Place all CSVs in a folder (eg `./mycsv/`). 
+
+> Set folder path for `CSV_FOLDER` in `.env`
+
+Required columns (exact names):
+- `Track Name`
+- `Artist Name(s)`
+
+Optional column:
+- `Album Name`
+
+The playlist name in YTMusic will be taken from the CSV filename (without extension).
+
+### How to export your Spotify playlists as CSV
+
+**Via the Spotify Web API (for developers):**
+Use the [Get Playlist Items](https://developer.spotify.com/documentation/web-api/reference/get-playlist) endpoint or the [Spotipy](https://spotipy.readthedocs.io) Python library to fetch tracks and write them to CSV.
+
+**No-code options:**
+- [Exportify](https://exportify.net) — log in with Spotify, select playlists, export as CSV
+- [Soundiiz / TuneMyMusic](https://soundiiz.com) — connect Spotify and export as CSV/TXT/JSON
+- [Spotify Scraper Chrome Extension](https://chromewebstore.google.com/detail/spotify-scraper-export-pl/khgafgeeamiogcfgjknmjomangdamhmn) — scrape playlists directly from the browser
+
+---
+
+## Using the CLI
+ 
+All commands follow the pattern:
+ 
+```bash
+python -m playlistmigrator [command] <arguments>
+```
+ 
+### `generate-creds`
+Generate `creds.json` from a request headers file (supports raw headers or pasted cURL commands).
+```bash
+python -m playlistmigrator generate-creds
+```
+ 
+### `load-csv`
+Convert a folder of CSV files into `playlists.json` (required before any transfer).
+```bash
+python -m playlistmigrator load-csv --csv-dir ./csvs --output playlists.json
+```
+ 
+| Argument | Default | Description |
+|---|---|---|
+| `--csv-dir` | CSV_FOLDER (in `.env`) | Path to the folder containing your CSV files |
+| `--output` | `playlists.json` | Output file path |
+ 
+### `list-playlists`
+Show all source playlists from `playlists.json` and all playlists in your YTMusic library side by side.
+```bash
+python -m playlistmigrator list-playlists
+```
+ 
+### `copy-playlist`
+Copy a single source playlist to YTMusic.
+```bash
+python -m playlistmigrator copy-playlist <playlist_id> [options]
+```
+ 
+| Argument | Default | Description |
+|---|---|---|
+| `playlist_id` | *(required)* | ID from `playlists.json` (the CSV filename, e.g. `my_playlist.csv`) |
+| `--yt-id` | auto-create | Target YTMusic playlist ID, or `+Playlist Name` to look up by name |
+| `--dry-run` | off | Preview the transfer without making any changes |
+| `--track-sleep` | `0.1` | Seconds to wait between tracks (increase if hitting rate limits) |
+| `--algo` | `0` | Search algorithm: `0`=exact, `1`=extended, `2`=approximate |
+| `--privacy` | `PRIVATE` | Playlist privacy: `PRIVATE`, `PUBLIC`, or `UNLISTED` |
+ 
+**Examples:**
+```bash
+# Copy to a new auto-created playlist
+python -m playlistmigrator copy-playlist my_playlist.csv
+ 
+# Copy into an existing YTMusic playlist by ID
+python -m playlistmigrator copy-playlist my_playlist.csv --yt-id PLxxxxxxxxxxxxxx
+ 
+# Dry run with approximate matching
+python -m playlistmigrator copy-playlist my_playlist.csv --dry-run --algo 2
+```
+ 
+### `copy-all`
+Copy every playlist in `playlists.json` to YTMusic, skipping any already completed.
+```bash
+python -m playlistmigrator copy-all [options]
+```
+ 
+Accepts the same options as `copy-playlist` (except `playlist_id` and `--yt-id`).
+ 
+### `status`
+Show the current contents of `state.json` — what's completed, what's in progress, and the current row.
+```bash
+python -m playlistmigrator status
+```
+ 
+### `reset`
+Delete `state.json` to start fresh. Does not affect anything already written to YTMusic.
+```bash
+python -m playlistmigrator reset
+```
+ 
+---
+ 
+## Search Algorithms
+ 
+| Algo | Flag | Behaviour | Best for |
+|---|---|---|---|
+| Exact | `--algo 0` | Searches by album+artist first, falls back to first song result | Fast, works well for popular music |
+| Extended | `--algo 1` | Requires title, artist, and album all to match exactly | High accuracy, may miss more tracks |
+| Approximate | `--algo 2` | Fuzzy title/artist matching, falls back to video search | Obscure tracks, non-English titles, remixes |
+ 
+---
+ 
+## Using the UI
+ 
+The Streamlit UI provides a browser-based interface for all CLI features, plus a job queue for managing multiple transfers.
+ 
+### Start the UI
+ 
+```bash
+streamlit run ui/app.py
+```
+ 
+### UI Pages
+ 
+**🔐 Auth** — Check credential status, run OAuth setup, or generate credentials from request headers.
+ 
+**📂 Load CSV** — Select a CSV folder, preview detected playlists and track counts, then convert to `playlists.json`.
+ 
+**📋 Playlists** — Browse and search your source playlists (from `playlists.json`) and your YTMusic library side by side. Inspect the full track list of any playlist.
+ 
+**🎵 Transfer Queue** — The core UI feature:
+- Select a source playlist and a target YTMusic playlist (or auto-create)
+- Configure algorithm, dry run, privacy, and track sleep
+- Hit **Add to Queue and Execute** — if a transfer is already running, the job is queued and starts automatically when the current one finishes
+- Live progress bar, track counter, and scrolling log for the running job
+- Cancel pending jobs or clear finished ones at any time
+ 
+**🔧 Status & Diagnostics** — View raw `state.json`, see the per-playlist results history (tracks added / errors / duplicates), browse or download `unmatched_tracks.csv`, and reset state.
+ 
+---
+ 
+## Important Files
+ 
+| File | Purpose |
+|---|---|
+| `creds.json` | YTMusic OAuth credentials — keep secure, **do not commit** |
+| `request_headers.txt` | Raw session headers for header-based auth — keep secure, **do not commit** |
+| `playlists.json` | Converted playlist data generated by `load-csv` |
+| `state.json` | Migration progress — tracks current playlist, current row, completed playlists, and per-run results |
+| `unmatched_tracks.csv` | All failed lookups, duplicates, and suspicious matches with timestamps |
+ 
+---
+ 
+## Troubleshooting
+ 
+**`ERROR: No file 'creds.json' exists`** — Run `python -m playlistmigrator generate-creds` (header-based). See the Authentication section above.
+ 
+**`File playlists.json not found`** — Run `python -m playlistmigrator load-csv --csv-dir ./csvs` first.
+ 
+**Many unmatched tracks** — Try a higher algorithm: `--algo 1` or `--algo 2`. Approximate mode (`2`) also searches videos, which helps for obscure or non-English tracks.
+ 
+**Transfer interrupted mid-run** — Just re-run the same command or re-add the playlist to the UI queue. `state.json` tracks progress down to the individual track row and the run will resume automatically.
+ 
+**UI queue lost after restarting Streamlit** — The queue lives in browser session memory. Completed transfers are permanently recorded in `state.json`, so no work is lost — you just need to re-add any unfinished jobs to the queue.
