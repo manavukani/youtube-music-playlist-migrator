@@ -1,2 +1,0 @@
-[console_scripts]
-playlistmigrator = playlistmigrator.__main__:main

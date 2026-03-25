@@ -1,9 +1,0 @@
-[project]
-name = "playlistmigrator"
-version = "0.1.0"
-dependencies = [
-    "ytmusicapi"
-]
-
-[project.scripts]
-playlistmigrator = "playlistmigrator.__main__:main"

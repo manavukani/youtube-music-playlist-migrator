@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-oauth.json
-playlists.json
-state.json
-unmatched_tracks.csv
-.env
-mycsvs/

@@ -6,18 +6,18 @@ from ytmusicapi import YTMusic
 
 def get_ytmusic() -> YTMusic:
     """
-    Loads oauth.json and returns an authenticated YTMusic client, exits if missing.
+    Loads creds.json and returns an authenticated YTMusic client, exits if missing.
     """
-    if not os.path.exists("oauth.json"):
-        print("ERROR: No file 'oauth.json' exists in the current directory.")
+    if not os.path.exists("creds.json"):
+        print("ERROR: No file 'creds.json' exists in the current directory.")
         print("       Have you logged in to YTMusic?  Run 'playlistmigrator auth' to login")
         sys.exit(1)
 
     try:
-        return YTMusic("oauth.json")
+        return YTMusic("creds.json")
     except json.decoder.JSONDecodeError as e:
         print(f"ERROR: JSON Decode error while trying start YTMusic: {e}")
-        print("       This typically means a problem with a 'oauth.json' file.")
+        print("       This typically means a problem with a 'creds.json' file.")
         print("       Have you logged in to YTMusic?  Run 'playlistmigrator auth' to login")
         sys.exit(1)
 
