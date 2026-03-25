@@ -28,8 +28,15 @@ if os.path.exists(unmatched_file):
         df = pd.read_csv(unmatched_file)
         st.dataframe(df, use_container_width=True)
 
-        with open(unmatched_file, 'rb') as f:
-            st.download_button("⬇ Download unmatched_tracks.csv", data=f, file_name="unmatched_tracks.csv", mime="text/csv")
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            with open(unmatched_file, 'rb') as f:
+                st.download_button("⬇ Download unmatched_tracks.csv", data=f, file_name="unmatched_tracks.csv", mime="text/csv")
+        with btn_col2:
+            if st.button("🗑️ Flush Unmatched Tracks Logs"):
+                os.remove(unmatched_file)
+                st.success("Unmatched tracks log cleared.")
+                st.rerun()
     except Exception as e:
         st.error(f"Failed to read `{unmatched_file}`: {e}")
 else:
