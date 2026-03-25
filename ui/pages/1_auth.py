@@ -19,15 +19,6 @@ else:
 
 st.markdown("---")
 
-if st.button("Run OAuth Setup"):
-    with st.spinner("Running OAuth setup... Please follow the prompts in your terminal/browser."):
-        try:
-            auth_module.setup_oauth()
-            st.success("OAuth setup complete!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"OAuth setup failed: {e}")
-
 with st.expander("Advanced — Setup via request headers"):
     st.markdown("""
     1. Log in to YouTube Music in your browser.
