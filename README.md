@@ -20,8 +20,8 @@ A tool to migrate Spotify (or other) playlists from CSV exports to YouTube Music
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/manavukani/yt-playlist-from-csv.git
-cd yt-playlist-from-csv
+git clone https://github.com/manavukani/youtube-music-playlist-migrator.git
+cd youtube-music-playlist-migrator
 ```
 
 ### 2. Create a virtual environment and install dependencies
