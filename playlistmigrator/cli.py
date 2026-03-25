@@ -23,7 +23,13 @@ def load_csv():
     """
     def parse_arguments():
         parser = ArgumentParser(description="Converts CSV files in a directory to playlists.json")
-        parser.add_argument("--csv-dir", required=True, help="Directory containing CSV files")
+        default_csv_dir = os.environ.get("CSV_FOLDER")
+        parser.add_argument(
+            "--csv-dir",
+            default=default_csv_dir,
+            required=default_csv_dir is None,
+            help="Directory containing CSV files (default: $CSV_FOLDER)"
+        )
         parser.add_argument("--output", default="playlists.json", help="Output JSON file")
         return parser.parse_args()
     args = parse_arguments()

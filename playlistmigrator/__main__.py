@@ -1,6 +1,9 @@
 import sys
-from . import cli
 import inspect
+from dotenv import load_dotenv
+from . import cli
+
+load_dotenv()
 
 def list_commands(module):
     # include only functions defined in e.g. 'cli' module
