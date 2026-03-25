@@ -3,14 +3,17 @@ import json
 import csv
 import time
 import re
-import sys
 from typing import Optional, Union, Iterator, Dict, List
 from collections import namedtuple
 from dataclasses import dataclass, field
 from ytmusicapi import YTMusic
 
+import logging
+
 from .auth import get_ytmusic
 from .state import StateManager, RateLimiter
+
+logger = logging.getLogger(__name__)
 
 SongInfo = namedtuple("SongInfo", ["title", "artist", "album"])
 
@@ -132,7 +135,7 @@ def lookup_song(
                     return track
             # print(f"{track['videoId']} - {track['title']} - {track['artists'][0]['name']}")
         except Exception as e:
-            print(f"Unable to lookup album ({e}), continuing...")
+            logger.warning("Unable to lookup album (%s), continuing...", e)
 
     query = f"{track_name} by {artist_name}"
     if details:
@@ -188,7 +191,7 @@ def lookup_song(
                     track_name not in first_song_title
                     or songs[0]["artists"][0]["name"] != artist_name
                 ):  # If the first song is not the one we are looking for
-                    print("Not found in songs, searching videos")
+                    logger.debug("Not found in songs, searching videos")
                     new_songs = yt.search(
                         query=f"{track_name} by {artist_name}", filter="videos"
                     )  # Search videos
@@ -202,7 +205,7 @@ def lookup_song(
                             track_name in new_song_title
                             and artist_name in new_song_title
                         ) or (track_name in new_song_title):
-                            print("Found a video")
+                            logger.debug("Found a video match for track")
                             return new_song
                     else:
                         # Basically we only get here if the song isn't present anywhere on YouTube
@@ -211,6 +214,23 @@ def lookup_song(
                         )
                 else:
                     return songs[0]
+
+def _is_likely_mismatch(src: SongInfo, dst_track: dict) -> bool:
+    """Heuristic: does the YTMusic result look wrong for the source track?"""
+    def normalize(s: str) -> str:
+        return re.sub(r"[^\w\s]", "", s.lower()).strip()
+
+    dst_title = normalize(dst_track.get("title", ""))
+    src_title = normalize(src.title)
+
+    dst_artists = dst_track.get("artists", [])
+    dst_artist = normalize(dst_artists[0]["name"]) if dst_artists else ""
+    src_artist = normalize(src.artist)
+
+    title_match = src_title in dst_title or dst_title in src_title
+    artist_match = src_artist in dst_artist or dst_artist in src_artist
+
+    return not title_match or not artist_match
 
 def load_playlists_json(filename: str = "playlists.json", encoding: str = "utf-8"):
     """Load the `playlists.json` playlist file"""
@@ -246,14 +266,14 @@ def iter_spotify_playlist(
 
     for src_track in pl_tracks:
         if src_track["track"] is None:
-            print(f"WARNING: Track seems to be malformed, Skipping. Track: {src_track!r}")
+            logger.warning("Track seems to be malformed, skipping: %r", src_track)
             continue
 
         try:
             src_album_name = src_track["track"].get("album", {}).get("name", "")
             src_track_artist = src_track["track"]["artists"][0]["name"]
         except (TypeError, KeyError, IndexError) as e:
-            print(f"ERROR: Track seems to be malformed. Track: {src_track!r}")
+            logger.error("Track is malformed: %r", src_track)
             continue
         src_track_name = src_track["track"]["name"]
 
@@ -272,7 +292,7 @@ def _ytmusic_create_playlist(
             time.sleep(1) # Wait to avoid missing playlist ID error
             return id
         except Exception as e:
-            print(f"ERROR: (Retrying create_playlist: {title}) {e} in {exception_sleep} seconds")
+            logger.warning("Retrying create_playlist '%s': %s (in %ds)", title, e, exception_sleep)
             time.sleep(exception_sleep)
             exception_sleep *= 2
 
@@ -283,7 +303,7 @@ def get_playlist_id_by_name(yt: YTMusic, title: str) -> Optional[str]:
     try:
         playlists = yt.get_library_playlists(limit=5000)
     except KeyError as e:
-        print(f"Attempting to look up playlist '{title}' failed with KeyError: {e}")
+        logger.error("Playlist lookup by name failed for '%s': %s", title, e)
         return None
 
     for pl in playlists:
@@ -298,8 +318,14 @@ def write_unmatched_track(playlist_name, track_name, artist_name, reason="Not Fo
     with open(unmatched_file, 'a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['Playlist Name', 'Track Name', 'Artist Name', 'Reason'])
-        writer.writerow([playlist_name, track_name, artist_name, reason])
+            writer.writerow(['Timestamp', 'Playlist Name', 'Track Name', 'Artist Name', 'Reason'])
+        writer.writerow([
+            time.strftime("%Y-%m-%dT%H:%M:%S"),
+            playlist_name,
+            track_name,
+            artist_name,
+            reason
+        ])
 
 def copier(
     src_tracks: Iterator[SongInfo],
@@ -311,9 +337,10 @@ def copier(
     yt: Optional[YTMusic] = None,
     csv_file_id: Optional[str] = None,
     playlist_name: Optional[str] = None
-):
+) -> Dict:
     """
     Copies tracks to YTMusic, saving state per-row so it can resume.
+    Returns a dict with keys: added, errors, duplicates, skipped.
     """
     if yt is None:
         yt = get_ytmusic()
@@ -325,9 +352,9 @@ def copier(
         try:
             yt_pl = yt.get_playlist(playlistId=dst_pl_id)
         except Exception as e:
-            print(f"ERROR: Unable to find YTMusic playlist {dst_pl_id}: {e}")
+            logger.error("Unable to find YTMusic playlist %s: %s", dst_pl_id, e)
             raise ValueError(f"Invalid YTMusic playlist {dst_pl_id}")
-        print(f"== Youtube Playlist: {yt_pl['title']}")
+        logger.info("== Youtube Playlist: %s", yt_pl['title'])
         if not playlist_name:
             playlist_name = yt_pl['title']
 
@@ -340,8 +367,8 @@ def copier(
     # Check if we should even process this
     completed_csvs = state_manager.get('completed_csvs', [])
     if csv_file_id and csv_file_id in completed_csvs:
-        print(f"Skipping {csv_file_id}, already completed.")
-        return
+        logger.info("Skipping %s — already completed.", csv_file_id)
+        return {"added": 0, "errors": 0, "duplicates": 0, "skipped": True}
 
     if csv_file_id:
         state_manager.set('current_csv', csv_file_id)
@@ -354,14 +381,14 @@ def copier(
         if index < current_row:
             continue
 
-        print(f"Source:   {src_track.title} - {src_track.artist} - {src_track.album}")
+        logger.info("Source: %s - %s - %s", src_track.title, src_track.artist, src_track.album)
 
         try:
             dst_track = lookup_song(
                 yt, src_track.title, src_track.artist, src_track.album, yt_search_algo
             )
         except Exception as e:
-            print(f"ERROR: Unable to look up song on YTMusic: {e}")
+            logger.error("Lookup failed for '%s' by '%s': %s", src_track.title, src_track.artist, e)
             write_unmatched_track(playlist_name or "Unknown", src_track.title, src_track.artist, reason=str(e))
             error_count += 1
 
@@ -374,13 +401,30 @@ def copier(
         yt_artist_name = "<Unknown>"
         if "artists" in dst_track and len(dst_track["artists"]) > 0:
             yt_artist_name = dst_track["artists"][0]["name"]
-        print(
-            f"  Youtube: {dst_track['title']} - {yt_artist_name} - {dst_track.get('album', '<Unknown>')}"
-        )
+        logger.info("  Match: %s - %s", dst_track['title'], yt_artist_name)
+
+        if _is_likely_mismatch(src_track, dst_track):
+            logger.warning(
+                "Possible mismatch — Source: '%s' by '%s' | Matched: '%s' by '%s'",
+                src_track.title, src_track.artist,
+                dst_track['title'], yt_artist_name
+            )
+            write_unmatched_track(
+                playlist_name or "Unknown",
+                src_track.title,
+                src_track.artist,
+                reason=f"POSSIBLE_MISMATCH — matched '{dst_track['title']}' by '{yt_artist_name}'"
+            )
 
         if dst_track["videoId"] in tracks_added_set:
-            print("(DUPLICATE, this track has already been added in this session)")
+            logger.warning("Duplicate videoId skipped: %s", dst_track["videoId"])
             duplicate_count += 1
+            write_unmatched_track(
+                playlist_name or "Unknown",
+                src_track.title,
+                src_track.artist,
+                reason=f"DUPLICATE (videoId: {dst_track['videoId']})"
+            )
         tracks_added_set.add(dst_track["videoId"])
 
         if not dry_run:
@@ -397,9 +441,7 @@ def copier(
                         yt.rate_song(dst_track["videoId"], "LIKE")
                     break
                 except Exception as e:
-                    print(
-                        f"ERROR: (Retrying add_playlist_items: {dst_pl_id} {dst_track['videoId']}) {e} in {exception_sleep} seconds"
-                    )
+                    logger.warning("Retrying add_playlist_items for %s: %s (in %ds)", dst_pl_id, e, exception_sleep)
                     time.sleep(exception_sleep)
                     exception_sleep *= 2
 
@@ -411,18 +453,26 @@ def copier(
         state_manager.set('current_row', current_row)
         state_manager.save()
 
+    results = {
+        "added": len(tracks_added_set),
+        "duplicates": duplicate_count,
+        "errors": error_count,
+        "skipped": False,
+    }
+
     print()
     print(
-        f"Added {len(tracks_added_set)} tracks, encountered {duplicate_count} duplicates, {error_count} errors"
+        f"Added {results['added']} tracks, encountered {results['duplicates']} duplicates, {results['errors']} errors"
     )
 
-    # Mark playlist as completed in state
     if csv_file_id:
         completed_csvs.append(csv_file_id)
         state_manager.set('completed_csvs', completed_csvs)
         state_manager.set('current_csv', None)
         state_manager.set('current_row', 0)
         state_manager.save()
+
+    return results
 
 def copy_playlist(
     spotify_playlist_id: str,

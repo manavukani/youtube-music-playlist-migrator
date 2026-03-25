@@ -1,4 +1,4 @@
-import sys
+import logging
 import threading
 from typing import List, Optional
 from dataclasses import dataclass, field
@@ -38,6 +38,19 @@ class TransferJob:
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     error_message: Optional[str] = None # set if status == ERROR
+
+class _JobLogHandler(logging.Handler):
+    """Routes backend log records into a TransferJob's log_lines list."""
+
+    def __init__(self, job: "TransferJob"):
+        super().__init__()
+        self.job = job
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.job.log_lines.append(msg)
+        if len(self.job.log_lines) > 200:
+            self.job.log_lines.pop(0)
 
 class QueueManager:
     """
@@ -82,84 +95,58 @@ class QueueManager:
 
     def _execute_job(self, job: TransferJob) -> None:
         """
-        Runs backend.copy_playlist() with a patched copier that reports
-        progress back to the job object in real time.
+        Runs backend.copier() with a logging handler that routes log records
+        into the job's live log, and reads structured results from the return value.
         """
         job.status = STATUS_RUNNING
         job.started_at = datetime.utcnow().isoformat()
 
+        handler = _JobLogHandler(job)
+        handler.setFormatter(logging.Formatter("%(levelname)s — %(message)s"))
+        backend_logger = logging.getLogger("playlistmigrator.backend")
+        backend_logger.addHandler(handler)
+        backend_logger.setLevel(logging.DEBUG)
+
         try:
             yt = auth_module.get_ytmusic()
 
-            # Pre-count total tracks for progress bar
             spotify_pls = backend.load_playlists_json()
             for pl in spotify_pls["playlists"]:
                 if pl["id"] == job.src_playlist_id:
                     job.total_tracks = len(pl["tracks"])
                     break
 
-            # Build a progress-tracking iterator wrapper
             def tracked_iter():
                 for song in backend.iter_spotify_playlist(job.src_playlist_id):
                     job.tracks_done += 1
                     job.progress = int((job.tracks_done / max(job.total_tracks, 1)) * 100)
                     yield song
 
-            # Capture stdout into log_lines
-            class LogCapture:
-                def write(self_inner, msg):
-                    if msg.strip():
-                        job.log_lines.append(msg.strip())
-
-                        # Custom parsing to capture counts from logs
-                        lower_msg = msg.strip().lower()
-                        if "error:" in lower_msg and "unable to look up song" in lower_msg:
-                            job.tracks_errored += 1
-                        elif "(duplicate" in lower_msg:
-                            job.tracks_skipped += 1
-
-                        # Final summary logic could also go here, but since the copier prints
-                        # a summary at the end, we'll try to parse that.
-                        if msg.startswith("Added "):
-                            try:
-                                parts = msg.strip().split()
-                                # Added 1 tracks, encountered 0 duplicates, 0 errors
-                                if len(parts) >= 2:
-                                    job.tracks_added = int(parts[1])
-                            except:
-                                pass
-
-                        if len(job.log_lines) > 200:
-                            job.log_lines.pop(0)
-                def flush(self_inner): pass
-
-            old_stdout = sys.stdout
-            sys.stdout = LogCapture()
-
-            try:
-                # Resolve dst playlist ID (create if needed)
-                dst_id = job.dst_playlist_id
-                if dst_id is None:
-                    dst_id = backend._ytmusic_create_playlist(
-                        yt,
-                        title=job.src_playlist_name,
-                        description="Imported from CSV",
-                        privacy_status=job.privacy
-                    )
-                    job.dst_playlist_id = dst_id
-
-                backend.copier(
-                    tracked_iter(),
-                    dst_pl_id=dst_id,
-                    dry_run=job.dry_run,
-                    track_sleep=job.track_sleep,
-                    yt_search_algo=job.algo,
-                    yt=yt,
-                    csv_file_id=job.src_playlist_id,
-                    playlist_name=job.src_playlist_name,
+            dst_id = job.dst_playlist_id
+            if dst_id is None:
+                dst_id = backend._ytmusic_create_playlist(
+                    yt,
+                    title=job.src_playlist_name,
+                    description="Imported from CSV",
+                    privacy_status=job.privacy
                 )
-            finally:
-                sys.stdout = old_stdout
+                job.dst_playlist_id = dst_id
+
+            results = backend.copier(
+                tracked_iter(),
+                dst_pl_id=dst_id,
+                dry_run=job.dry_run,
+                track_sleep=job.track_sleep,
+                yt_search_algo=job.algo,
+                yt=yt,
+                csv_file_id=job.src_playlist_id,
+                playlist_name=job.src_playlist_name,
+            )
+
+            if results:
+                job.tracks_added = results.get("added", 0)
+                job.tracks_errored = results.get("errors", 0)
+                job.tracks_skipped = results.get("duplicates", 0)
 
             job.status = STATUS_DONE
             job.progress = 100
@@ -169,6 +156,7 @@ class QueueManager:
             job.error_message = str(e)
 
         finally:
+            backend_logger.removeHandler(handler)
             job.finished_at = datetime.utcnow().isoformat()
 
     def get_jobs(self) -> List[TransferJob]:
