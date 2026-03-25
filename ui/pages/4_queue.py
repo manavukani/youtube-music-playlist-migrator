@@ -41,9 +41,8 @@ if current_csv:
 if st.toggle("Auto-refresh (2s)", value=True):
     st_autorefresh(interval=2000, key="queue_refresh")
 
-st.markdown("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
 st.subheader("SECTION A: Submit a New Job")
-st.markdown("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 col1, col2 = st.columns(2)
 
@@ -66,7 +65,7 @@ with col1:
 
     except FileNotFoundError:
         st.warning("`playlists.json` not found. [Load CSV](/2_load_csv) first.")
-        st.button("➕ Add to Queue", disabled=True) # disable button if not found
+        st.button("➕ Add to Queue & Execute", disabled=True) # disable button if not found
 
 target_options = {}
 selected_target_id = None
@@ -108,7 +107,7 @@ if playlists:
         st.warning("This playlist is already pending or running in the queue.")
         allow_override = st.checkbox("I know, add it anyway")
 
-    if st.button("➕ Add to Queue", disabled=is_duplicate and not allow_override):
+    if st.button("➕ Add to Queue & Execute", disabled=is_duplicate and not allow_override):
         if not os.path.exists("creds.json"):
             st.error("Not authenticated. Go to Auth page.")
         elif not selected_source_id:
@@ -155,9 +154,9 @@ if playlists:
 
             st.rerun()
 
-st.markdown("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+st.divider()
+
 st.subheader("SECTION B: Queue Status")
-st.markdown("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 jobs = qm.get_jobs()
 running_count = sum(1 for j in jobs if j.status == STATUS_RUNNING)
